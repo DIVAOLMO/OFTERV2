@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Widget Production — OF passés</title>
+
+  <!-- CSS externalisé -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <div class="wrap">
+    <section class="header" aria-label="Zone KPIs production">
+      <div class="header-top">
+        <div class="badge" id="statusBadge">
+          <span class="dot"></span>
+          <span id="statusText">Chargement des données…</span>
+        </div>
+
+        <div class="badge" id="filterBadge" style="display:none">
+          <span class="dot"></span>
+          <span>Filtre famille : <strong id="filterValue"></strong></span>
+          <button class="btn" id="resetFilterBtn">Reset</button>
+        </div>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi">
+          <div class="label">OTD</div>
+          <div class="value" id="kpiOtd">—</div>
+          <div class="sub">% OF à l’heure</div>
+        </div>
+
+        <div class="kpi">
+          <div class="label">Retard moyen</div>
+          <div class="value" id="kpiDelay">—</div>
+          <div class="sub">jours</div>
+        </div>
+
+        <div class="kpi">
+          <div class="label">OF rentables</div>
+          <div class="value" id="kpiProfit">—</div>
+          <div class="sub">%</div>
+        </div>
+
+        <div class="kpi">
+          <div class="label">Écart coût</div>
+          <div class="value" id="kpiGap">—</div>
+          <div class="sub">%</div>
+        </div>
+
+        <div class="kpi">
+          <div class="label">Marge moyenne</div>
+          <div class="value" id="kpiMargin">—</div>
+          <div class="sub">€</div>
+        </div>
+      </div>
+    </section>
+
+    <main class="main">
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="panel-title">Histogramme — Famille de produits</p>
+            <p class="panel-note">Clic barre = filtre</p>
+          </div>
+          <div class="badge">
+            <span class="dot"></span>
+            <span id="volumetry">— OF</span>
+          </div>
+        </div>
+
+        <div class="svg-wrap">
+          <svg id="svgFamilies" viewBox="0 0 640 320"></svg>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="panel-title">Centres de charge — Top 5</p>
+            <p class="panel-note">Taux d’occupation</p>
+          </div>
+          <div class="badge">
+            <span class="dot"></span>
+            <span>Capacité</span>
+          </div>
+        </div>
+
+        <div class="svg-wrap">
+          <svg id="svgCenters" viewBox="0 0 640 320"></svg>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    /* ===============================
+       CONFIG
+    =============================== */
+    const CSV_URL = 'ofspasse.csv';   // ✅ bon fichier CSV
+    const REFRESH_MS = 5 * 60 * 1000;
+
+    const state = { raw: [], familyFilter: null };
+    const $ = id => document.getElementById(id);
+
+    const frInt = new Intl.NumberFormat('fr-FR');
+    const frPct = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 });
+    const frEur = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+
+    function parseDateFR(s){
+      if(!s) return null;
+      const [d,m,y] = s.split('/').map(Number);
+      return new Date(y, m-1, d);
+    }
+
+    function daysBetween(a,b){
+      return Math.round((a-b)/(1000*60*60*24));
+    }
+
+    function parseCSV(text){
+      const lines = text.trim().split('\n');
+      const headers = lines.shift().split(';');
+      return lines.map(l=>{
+        const o={};
+        l.split(';').forEach((v,i)=>o[headers[i]]=v);
+        return o;
+      });
+    }
+
+    async function loadData(){
+      try{
+        $('statusText').textContent='Chargement…';
+        const r = await fetch(CSV_URL+'?t='+Date.now());
+        const t = await r.text();
+        const rows = parseCSV(t);
+
+        state.raw = rows.map(r=>({
+          famille_produit: r.famille_produit,
+          type_produit: r.type_produit,
+          date_fin_prevue: parseDateFR(r.date_fin_prevue),
+          date_fin_reelle: parseDateFR(r.date_fin_reelle),
+          cout_prevu: +r.cout_prevu,
+          cout_reel: +r.cout_reel,
+          prix_vente: +r.prix_vente
+        })).filter(r=>r.date_fin_prevue && r.date_fin_reelle);
+
+        $('statusText').textContent='Données à jour';
+        renderAll();
+      }catch(e){
+        $('statusText').textContent='Erreur CSV';
+      }
+    }
+
+    function getFiltered(){
+      return state.familyFilter
+        ? state.raw.filter(r=>r.famille_produit===state.familyFilter)
+        : state.raw;
+    }
+
+    function computeKPIs(data){
+      const total=data.length;
+      if(!total) return {};
+      const onTime=data.filter(r=>r.date_fin_reelle<=r.date_fin_prevue).length;
+      const late=data.filter(r=>r.date_fin_reelle>r.date_fin_prevue);
+      return {
+        total,
+        otd:onTime/total*100,
+        avgDelay: late.length ? late.reduce((a,r)=>a+daysBetween(r.date_fin_reelle,r.date_fin_prevue),0)/late.length : 0,
+        profitRate:data.filter(r=>r.cout_reel<r.cout_prevu).length/total*100,
+        costGap:data.reduce((a,r)=>a+(r.cout_reel-r.cout_prevu)/r.cout_prevu*100,0)/total,
+        avgMargin:data.filter(r=>r.type_produit==='Produits finis')
+                      .reduce((a,r)=>a+(r.prix_vente-r.cout_reel),0)/total
+      };
+    }
+
+    function renderKPIs(k){
+      $('volumetry').textContent = frInt.format(k.total)+' OF';
+      $('kpiOtd').textContent = frPct.format(k.otd)+' %';
+      $('kpiDelay').textContent = frPct.format(k.avgDelay)+' j';
+      $('kpiProfit').textContent = frPct.format(k.profitRate)+' %';
+      $('kpiGap').textContent = frPct.format(k.costGap)+' %';
+      $('kpiMargin').textContent = frEur.format(k.avgMargin);
+    }
+
+    function renderAll(){
+      const data=getFiltered();
+      renderKPIs(computeKPIs(data));
+    }
+
+    loadData();
+    setInterval(loadData, REFRESH_MS);
+  </script>
+</body>
+</html>
+``
