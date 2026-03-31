@@ -96,103 +96,312 @@
     </main>
   </div>
 
-  <script>
-    /* ===============================
-       CONFIG
-    =============================== */
-    const CSV_URL = 'ofspasse.csv';   // ✅ bon fichier CSV
-    const REFRESH_MS = 5 * 60 * 1000;
+ <script>
+// ===============================
+// Données : lecture + parsing CSV
+// ===============================
+const CSV_URL = 'ofspasse.csv';
+const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
 
-    const state = { raw: [], familyFilter: null };
-    const $ = id => document.getElementById(id);
+const state = { raw: [], familyFilter: null };
+const $ = (id) => document.getElementById(id);
 
-    const frInt = new Intl.NumberFormat('fr-FR');
-    const frPct = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 });
-    const frEur = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+const frInt = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 });
+const frPct = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 });
+const frEur = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
 
-    function parseDateFR(s){
-      if(!s) return null;
-      const [d,m,y] = s.split('/').map(Number);
-      return new Date(y, m-1, d);
-    }
+function setStatus(text){
+  const el = $('statusText');
+  if(el) el.textContent = text;
+}
 
-    function daysBetween(a,b){
-      return Math.round((a-b)/(1000*60*60*24));
-    }
+function parseDateFR(s){
+  const [dd, mm, yyyy] = String(s ?? '').trim().split('/').map(Number);
+  if(!dd || !mm || !yyyy) return null;
+  return new Date(yyyy, mm - 1, dd);
+}
 
-    function parseCSV(text){
-      const lines = text.trim().split('\n');
-      const headers = lines.shift().split(';');
-      return lines.map(l=>{
-        const o={};
-        l.split(';').forEach((v,i)=>o[headers[i]]=v);
-        return o;
-      });
-    }
+function daysBetween(a,b){
+  const MS = 24*60*60*1000;
+  return Math.round((a.getTime() - b.getTime())/MS);
+}
 
-    async function loadData(){
-      try{
-        $('statusText').textContent='Chargement…';
-        const r = await fetch(CSV_URL+'?t='+Date.now());
-        const t = await r.text();
-        const rows = parseCSV(t);
+function parseCSV(text){
+  const lines = String(text ?? '').replace(/\r/g,'').split('\n').filter(l => l.trim().length);
+  if(lines.length < 2) return [];
+  const headers = lines[0].split(';').map(h => h.trim());
+  const out = [];
+  for(let i=1;i<lines.length;i++){
+    const cols = lines[i].split(';');
+    const row = {};
+    headers.forEach((h, idx) => row[h] = (cols[idx] ?? '').trim());
+    out.push(row);
+  }
+  return out;
+}
 
-        state.raw = rows.map(r=>({
-          famille_produit: r.famille_produit,
-          type_produit: r.type_produit,
-          date_fin_prevue: parseDateFR(r.date_fin_prevue),
-          date_fin_reelle: parseDateFR(r.date_fin_reelle),
-          cout_prevu: +r.cout_prevu,
-          cout_reel: +r.cout_reel,
-          prix_vente: +r.prix_vente
-        })).filter(r=>r.date_fin_prevue && r.date_fin_reelle);
+function toNum(v){
+  const n = Number(String(v ?? '').replace(',', '.'));
+  return Number.isFinite(n) ? n : 0;
+}
 
-        $('statusText').textContent='Données à jour';
-        renderAll();
-      }catch(e){
-        $('statusText').textContent='Erreur CSV';
-      }
-    }
+async function loadData(){
+  try{
+    setStatus('Chargement des données…');
+    const url = `${CSV_URL}?ts=${Date.now()}`;
+    const res = await fetch(url, { cache: 'no-store' });
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const txt = await res.text();
+    const rows = parseCSV(txt);
 
-    function getFiltered(){
-      return state.familyFilter
-        ? state.raw.filter(r=>r.famille_produit===state.familyFilter)
-        : state.raw;
-    }
+    const normalized = rows.map(r => ({
+      of_id: r.of_id,
+      date_fin_prevue: parseDateFR(r.date_fin_prevue),
+      date_fin_reelle: parseDateFR(r.date_fin_reelle),
+      cout_prevu: toNum(r.cout_prevu),
+      cout_reel: toNum(r.cout_reel),
+      prix_vente: toNum(r.prix_vente),
+      type_produit: r.type_produit,
+      famille_produit: r.famille_produit,
+      centre_charge: r.centre_charge,
+    })).filter(r => r.date_fin_prevue && r.date_fin_reelle);
 
-    function computeKPIs(data){
-      const total=data.length;
-      if(!total) return {};
-      const onTime=data.filter(r=>r.date_fin_reelle<=r.date_fin_prevue).length;
-      const late=data.filter(r=>r.date_fin_reelle>r.date_fin_prevue);
-      return {
-        total,
-        otd:onTime/total*100,
-        avgDelay: late.length ? late.reduce((a,r)=>a+daysBetween(r.date_fin_reelle,r.date_fin_prevue),0)/late.length : 0,
-        profitRate:data.filter(r=>r.cout_reel<r.cout_prevu).length/total*100,
-        costGap:data.reduce((a,r)=>a+(r.cout_reel-r.cout_prevu)/r.cout_prevu*100,0)/total,
-        avgMargin:data.filter(r=>r.type_produit==='Produits finis')
-                      .reduce((a,r)=>a+(r.prix_vente-r.cout_reel),0)/total
-      };
-    }
+    state.raw = normalized;
+    setStatus('Données à jour');
+    renderAll();
+  }catch(e){
+    console.error(e);
+    setStatus('Erreur chargement CSV');
+  }
+}
 
-    function renderKPIs(k){
-      $('volumetry').textContent = frInt.format(k.total)+' OF';
-      $('kpiOtd').textContent = frPct.format(k.otd)+' %';
-      $('kpiDelay').textContent = frPct.format(k.avgDelay)+' j';
-      $('kpiProfit').textContent = frPct.format(k.profitRate)+' %';
-      $('kpiGap').textContent = frPct.format(k.costGap)+' %';
-      $('kpiMargin').textContent = frEur.format(k.avgMargin);
-    }
+// ===============================
+// KPI
+// ===============================
+function getFiltered(){
+  if(!state.familyFilter) return state.raw;
+  return state.raw.filter(r => r.famille_produit === state.familyFilter);
+}
 
-    function renderAll(){
-      const data=getFiltered();
-      renderKPIs(computeKPIs(data));
-    }
+function computeKPIs(data){
+  const total = data.length || 0;
+  if(total === 0){
+    return { total:0, otd:null, avgDelay:null, profitRate:null, costGap:null, avgMargin:null };
+  }
 
-    loadData();
-    setInterval(loadData, REFRESH_MS);
-  </script>
+  const onTime = data.filter(r => r.date_fin_reelle <= r.date_fin_prevue).length;
+  const otd = (onTime / total) * 100;
+
+  const late = data.filter(r => r.date_fin_reelle > r.date_fin_prevue);
+  const avgDelay = late.length
+    ? (late.reduce((acc,r) => acc + daysBetween(r.date_fin_reelle, r.date_fin_prevue), 0) / late.length)
+    : 0;
+
+  const profitable = data.filter(r => r.cout_reel < r.cout_prevu).length;
+  const profitRate = (profitable / total) * 100;
+
+  const costGap = data.reduce((acc,r) =>
+      acc + (r.cout_prevu ? ((r.cout_reel - r.cout_prevu) / r.cout_prevu) * 100 : 0)
+    , 0) / total;
+
+  const finished = data.filter(r => r.type_produit === 'Produits finis');
+  const avgMargin = finished.length
+    ? (finished.reduce((acc,r) => acc + (r.prix_vente - r.cout_reel), 0) / finished.length)
+    : 0;
+
+  return { total, otd, avgDelay, profitRate, costGap, avgMargin };
+}
+
+function renderKPIs(k){
+  const v = $('volumetry');
+  if(v) v.textContent = `${frInt.format(k.total)} OF`;
+
+  if($('kpiOtd')) $('kpiOtd').textContent = k.otd == null ? '—' : `${frPct.format(k.otd)} %`;
+  if($('kpiDelay')) $('kpiDelay').textContent = k.avgDelay == null ? '—' : `${frPct.format(k.avgDelay)} j`;
+  if($('kpiProfit')) $('kpiProfit').textContent = k.profitRate == null ? '—' : `${frPct.format(k.profitRate)} %`;
+  if($('kpiGap')) $('kpiGap').textContent = k.costGap == null ? '—' : `${(k.costGap>=0?'+':'')}${frPct.format(k.costGap)} %`;
+  if($('kpiMargin')) $('kpiMargin').textContent = k.avgMargin == null ? '—' : `${frEur.format(k.avgMargin)}`;
+}
+
+// ===============================
+// UI filtre famille
+// ===============================
+function updateFilterUI(){
+  const badge = $('filterBadge');
+  const value = $('filterValue');
+  const btn = $('resetFilterBtn');
+  if(!badge || !value || !btn) return;
+
+  if(state.familyFilter){
+    badge.style.display = 'inline-flex';
+    value.textContent = state.familyFilter;
+  } else {
+    badge.style.display = 'none';
+    value.textContent = '';
+  }
+
+  btn.onclick = () => { state.familyFilter = null; renderAll(); };
+}
+
+// ===============================
+// Graphique SVG : histogramme familles (clic = filtre)
+// ===============================
+function renderFamilies(){
+  const svg = $('svgFamilies');
+  if(!svg) return;
+  svg.innerHTML = '';
+
+  const raw = state.raw;
+  const map = new Map();
+  raw.forEach(r => {
+    const k = r.famille_produit || 'Non renseigné';
+    map.set(k, (map.get(k) || 0) + 1);
+  });
+
+  const items = Array.from(map.entries()).sort((a,b)=>b[1]-a[1]);
+
+  const W=640,H=320, pad={l:42,r:16,t:18,b:54};
+  const chartW=W-pad.l-pad.r, chartH=H-pad.t-pad.b;
+  const maxV = Math.max(1, ...items.map(i=>i[1]));
+  const gap = 10;
+  const barW = items.length ? (chartW - gap*(items.length-1))/items.length : chartW;
+
+  const ns='http://www.w3.org/2000/svg';
+
+  // grille
+  for(let i=0;i<=4;i++){
+    const y = pad.t + (chartH*i/4);
+    const ln = document.createElementNS(ns,'line');
+    ln.setAttribute('x1', pad.l);
+    ln.setAttribute('x2', W-pad.r);
+    ln.setAttribute('y1', y);
+    ln.setAttribute('y2', y);
+    ln.setAttribute('stroke', '#eef2f7');
+    ln.setAttribute('stroke-width', '1');
+    svg.appendChild(ln);
+  }
+
+  items.forEach((it,idx)=>{
+    const label=it[0], val=it[1];
+    const x = pad.l + idx*(barW+gap);
+    const h = Math.max(2, (val/maxV)*chartH);
+    const y = pad.t + (chartH - h);
+    const isSel = state.familyFilter && state.familyFilter === label;
+
+    const rect = document.createElementNS(ns,'rect');
+    rect.setAttribute('x', x);
+    rect.setAttribute('y', y);
+    rect.setAttribute('width', barW);
+    rect.setAttribute('height', h);
+    rect.setAttribute('fill', isSel ? '#0070DB' : '#C1DDF9');
+    rect.setAttribute('stroke', isSel ? '#0070DB' : '#e5e7eb');
+    rect.setAttribute('stroke-width', '1');
+    rect.style.cursor = 'pointer';
+
+    rect.addEventListener('click', ()=>{
+      state.familyFilter = (state.familyFilter === label) ? null : label;
+      renderAll();
+    });
+
+    svg.appendChild(rect);
+
+    const txt = document.createElementNS(ns,'text');
+    txt.setAttribute('x', x + barW/2);
+    txt.setAttribute('y', y - 6);
+    txt.setAttribute('text-anchor', 'middle');
+    txt.setAttribute('fill', isSel ? '#0070DB' : '#6b7280');
+    txt.setAttribute('font-size', '12');
+    txt.setAttribute('font-weight', isSel ? '900' : '700');
+    txt.textContent = val;
+    svg.appendChild(txt);
+
+    const lab = document.createElementNS(ns,'text');
+    lab.setAttribute('x', x + barW/2);
+    lab.setAttribute('y', pad.t + chartH + 28);
+    lab.setAttribute('text-anchor','middle');
+    lab.setAttribute('fill', '#1f2937');
+    lab.setAttribute('font-size','11');
+    lab.textContent = label;
+    svg.appendChild(lab);
+  });
+}
+
+// ===============================
+// Graphique SVG : centres de charge (valeurs fixes)
+// ===============================
+function renderCenters(){
+  const svg = $('svgCenters');
+  if(!svg) return;
+  svg.innerHTML='';
+
+  const ns='http://www.w3.org/2000/svg';
+  const data = [
+    {k:'débit', v:110},
+    {k:'usinage', v:95},
+    {k:'soudure', v:88},
+    {k:'Peinture', v:60},
+    {k:'Montage', v:75},
+  ];
+
+  const W=640,H=320, pad={l:110,r:22,t:18,b:18};
+  const chartW=W-pad.l-pad.r;
+  const rowH = (H-pad.t-pad.b)/data.length;
+  const maxV = 120;
+
+  data.forEach((d,i)=>{
+    const y = pad.t + i*rowH + 10;
+    const w = Math.max(0, Math.min(100, d.v/maxV*100));
+
+    const lab = document.createElementNS(ns,'text');
+    lab.setAttribute('x', 8);
+    lab.setAttribute('y', y+10);
+    lab.setAttribute('fill', '#1f2937');
+    lab.setAttribute('font-size','12');
+    lab.textContent = d.k;
+    svg.appendChild(lab);
+
+    const bg = document.createElementNS(ns,'rect');
+    bg.setAttribute('x', pad.l);
+    bg.setAttribute('y', y);
+    bg.setAttribute('width', chartW);
+    bg.setAttribute('height', 14);
+    bg.setAttribute('fill', '#eef2f7');
+    bg.setAttribute('stroke', '#e5e7eb');
+    svg.appendChild(bg);
+
+    const fill = document.createElementNS(ns,'rect');
+    fill.setAttribute('x', pad.l);
+    fill.setAttribute('y', y);
+    fill.setAttribute('width', chartW*(w/100));
+    fill.setAttribute('height', 14);
+    fill.setAttribute('fill', '#0070DB');
+    svg.appendChild(fill);
+
+    const val = document.createElementNS(ns,'text');
+    val.setAttribute('x', pad.l + chartW + 6);
+    val.setAttribute('y', y+11);
+    val.setAttribute('fill', '#6b7280');
+    val.setAttribute('font-size','12');
+    val.textContent = d.v + ' %';
+    svg.appendChild(val);
+  });
+}
+
+function renderAll(){
+  const data = getFiltered();
+  const k = computeKPIs(data);
+  renderKPIs(k);
+  updateFilterUI();
+  renderFamilies();
+  renderCenters();
+}
+
+// init
+(function main(){
+  loadData();
+  setInterval(loadData, REFRESH_MS);
+})();
+</script>
 </body>
 </html>
 ``
