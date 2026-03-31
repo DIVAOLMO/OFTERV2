@@ -73,7 +73,7 @@
         </div>
 
         <div class="svg-wrap">
-          <svg id="svgFamilies" viewBox="0 0 640 320" height="320"></svg>
+          <svg id="svgFamilies" viewBox="0 0 640 420" height="420"></svg>
         </div>
       </section>
 
@@ -90,7 +90,7 @@
         </div>
 
         <div class="svg-wrap">
-          <svg id="svgCenters" viewBox="0 0 640 320" height="320"></svg>
+          <svg id="svgCenters" viewBox="0 0 640 420" height="420"></svg>
         </div>
       </section>
     </main>
@@ -260,7 +260,7 @@ function renderFamilies(){
 
   const items = Array.from(map.entries()).sort((a,b)=>b[1]-a[1]);
 
-  const W=640,H=320, pad={l:42,r:16,t:18,b:54};
+  const W=640,H=420, pad={l:42,r:16,t:18,b:54};
   const chartW=W-pad.l-pad.r, chartH=H-pad.t-pad.b;
   const maxV = Math.max(1, ...items.map(i=>i[1]));
   const gap = 10;
@@ -343,7 +343,7 @@ function renderCenters(){
     {k:'Montage', v:75},
   ];
 
-  const W=640,H=320, pad={l:110,r:22,t:18,b:18};
+  const W=640,H=420, pad={l:110,r:22,t:18,b:18};
   const chartW=W-pad.l-pad.r;
   const rowH = (H-pad.t-pad.b)/data.length;
   const maxV = 120;
